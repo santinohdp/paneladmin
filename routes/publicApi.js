@@ -1,5 +1,8 @@
 // routes/publicApi.js
 // API consumida por la app/cliente. Base montada en /SNEOSMART5/api
+// El esquema de respuesta sigue el formato estándar de Xtream Codes
+// (player_api.php), porque es el que espera el LoginActivity/LoginCallback
+// decompilado de la app cliente.
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../database');
@@ -10,22 +13,61 @@ function hoyISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Busca y valida un usuario cliente. Devuelve { usuario, error, codigo }
-function validarUsuario(username, password) {
-  if (!username || !password) {
-    return { error: 'Usuario y contraseña requeridos', codigo: 400 };
-  }
+function unixSeconds(fechaISO) {
+  // fechaISO puede ser "YYYY-MM-DD" o "YYYY-MM-DD HH:MM:SS"
+  const t = new Date(fechaISO.includes(' ') ? fechaISO.replace(' ', 'T') + 'Z' : fechaISO + 'T00:00:00Z').getTime();
+  return Math.floor((isNaN(t) ? Date.now() : t) / 1000);
+}
+
+// Busca al usuario y arma el objeto user_info en formato Xtream, sin importar
+// si las credenciales son válidas o no (Xtream siempre responde 200 OK y
+// comunica el resultado a través de "auth": 1 / 0 dentro del JSON).
+function construirUserInfo(username, password) {
   const u = db.prepare('SELECT * FROM usuarios WHERE username = ?').get(username);
-  if (!u || !bcrypt.compareSync(password, u.password)) {
-    return { error: 'Usuario o contraseña incorrectos', codigo: 401 };
-  }
-  if (!u.activo) {
-    return { error: 'Cuenta suspendida', codigo: 403 };
-  }
-  if (u.fecha_vencimiento < hoyISO()) {
-    return { error: 'Cuenta vencida', codigo: 403 };
-  }
-  return { usuario: u };
+
+  const credencialesValidas = !!u && bcrypt.compareSync(password || '', u.password);
+  const activo = credencialesValidas && !!u.activo;
+  const vencido = credencialesValidas && u.fecha_vencimiento < hoyISO();
+  const auth = credencialesValidas && activo && !vencido;
+
+  let status = 'Disabled';
+  if (!credencialesValidas) status = 'Disabled';
+  else if (!activo) status = 'Disabled';
+  else if (vencido) status = 'Expired';
+  else status = 'Active';
+
+  return {
+    usuario: auth ? u : null,
+    auth,
+    user_info: {
+      username: username || '',
+      password: password || '',
+      message: '',
+      auth: auth ? 1 : 0,
+      status,
+      exp_date: u ? String(unixSeconds(u.fecha_vencimiento)) : '0',
+      is_trial: '0',
+      active_cons: '0',
+      created_at: u ? String(unixSeconds(u.creado_en)) : '0',
+      max_connections: u ? String(u.max_conexiones) : '1',
+      allowed_output_formats: ['m3u8', 'ts', 'rtmp'],
+    },
+  };
+}
+
+function construirServerInfo(req) {
+  const host = req.hostname;
+  const esHttps = req.protocol === 'https';
+  return {
+    url: host,
+    port: esHttps ? '80' : String(req.socket.localPort || 80),
+    https_port: '443',
+    server_protocol: esHttps ? 'https' : 'http',
+    rtmp_port: '25461',
+    timezone: 'America/Argentina/Buenos_Aires',
+    timestamp_now: Math.floor(Date.now() / 1000),
+    time_now: new Date().toISOString().slice(0, 19).replace('T', ' '),
+  };
 }
 
 function armarListasContenido() {
@@ -38,47 +80,58 @@ function armarListasContenido() {
   `).all();
 
   const categorias = [...new Set(contenido.map(c => c.categoria))].map((nombre, i) => ({
-    category_id: i + 1,
+    category_id: String(i + 1),
     category_name: nombre,
+    parent_id: 0,
   }));
 
-  return { contenido, categorias };
+  const streams = contenido.map((c, i) => {
+    const cat = categorias.find(cat => cat.category_name === c.categoria);
+    return {
+      num: i + 1,
+      name: c.titulo,
+      stream_type: 'live',
+      stream_id: c.id,
+      stream_icon: c.logo || '',
+      epg_channel_id: '',
+      added: String(Math.floor(Date.now() / 1000)),
+      category_id: cat ? cat.category_id : '0',
+      custom_sid: '',
+      tv_archive: 0,
+      direct_source: c.url_stream,
+      tv_archive_duration: 0,
+      thumbnail: c.logo || '',
+    };
+  });
+
+  return { streams, categorias };
 }
 
-// GET o POST /SNEOSMART5/api/  (estilo panel_api: login + config de sesión + listas)
+// GET o POST /SNEOSMART5/api/  (login estilo Xtream: player_api.php)
 router.all('/', (req, res) => {
   const username = req.body.username || req.query.username;
   const password = req.body.password || req.query.password;
 
-  const { usuario, error, codigo } = validarUsuario(username, password);
-  if (error) return res.status(codigo).json({ ok: false, error });
+  if (!username || !password) {
+    return res.json({ user_info: { auth: 0, status: 'Disabled', message: 'Usuario y contraseña requeridos' } });
+  }
 
-  const { contenido, categorias } = armarListasContenido();
+  const { auth, user_info } = construirUserInfo(username, password);
+  const server_info = construirServerInfo(req);
 
-  res.json({
-    ok: true,
-    user_info: {
-      username: usuario.username,
-      status: 'Active',
-      exp_date: usuario.fecha_vencimiento,
-      max_connections: usuario.max_conexiones,
-      created_at: usuario.creado_en,
-    },
-    server_info: {
-      url: req.protocol + '://' + req.get('host'),
-      base_path: '/SNEOSMART5/api',
-      time_now: new Date().toISOString(),
-    },
-    categories: categorias,
-    streams: contenido,
-  });
+  if (!auth) {
+    // Xtream responde 200 igual, la app lee "auth": 0 / "status" para mostrar el motivo.
+    return res.json({ user_info, server_info });
+  }
+
+  res.json({ user_info, server_info });
 });
 
 // GET /SNEOSMART5/api/get_live_categories?username=&password=
 router.get('/get_live_categories', (req, res) => {
   const { username, password } = req.query;
-  const { error, codigo } = validarUsuario(username, password);
-  if (error) return res.status(codigo).json({ ok: false, error });
+  const { auth } = construirUserInfo(username, password);
+  if (!auth) return res.json([]);
 
   const { categorias } = armarListasContenido();
   res.json(categorias);
@@ -87,15 +140,14 @@ router.get('/get_live_categories', (req, res) => {
 // GET /SNEOSMART5/api/get_live_streams?username=&password=&category_id=
 router.get('/get_live_streams', (req, res) => {
   const { username, password, category_id } = req.query;
-  const { error, codigo } = validarUsuario(username, password);
-  if (error) return res.status(codigo).json({ ok: false, error });
+  const { auth } = construirUserInfo(username, password);
+  if (!auth) return res.json([]);
 
-  const { contenido, categorias } = armarListasContenido();
+  const { streams } = armarListasContenido();
 
-  let resultado = contenido;
+  let resultado = streams;
   if (category_id) {
-    const cat = categorias.find(c => String(c.category_id) === String(category_id));
-    if (cat) resultado = contenido.filter(c => c.categoria === cat.category_name);
+    resultado = streams.filter(s => String(s.category_id) === String(category_id));
   }
 
   res.json(resultado);
