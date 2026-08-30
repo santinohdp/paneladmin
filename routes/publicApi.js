@@ -1,8 +1,10 @@
 // routes/publicApi.js
 // API consumida por la app/cliente. Base montada en /SNEOSMART5/api
-// El esquema de respuesta sigue el formato estándar de Xtream Codes
-// (player_api.php), porque es el que espera el LoginActivity/LoginCallback
-// decompilado de la app cliente.
+// La app real (decompilada) usa Retrofit apuntando SIEMPRE a:
+//   {baseURL}player_api.php?username=..&password=..[&action=..]
+// Es decir, TODO pasa por un único endpoint "player_api.php", y el
+// parámetro "action" decide si es login, categorías, streams, etc.
+// (esquema estándar de Xtream Codes).
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const db = require('../database');
@@ -14,14 +16,12 @@ function hoyISO() {
 }
 
 function unixSeconds(fechaISO) {
-  // fechaISO puede ser "YYYY-MM-DD" o "YYYY-MM-DD HH:MM:SS"
   const t = new Date(fechaISO.includes(' ') ? fechaISO.replace(' ', 'T') + 'Z' : fechaISO + 'T00:00:00Z').getTime();
   return Math.floor((isNaN(t) ? Date.now() : t) / 1000);
 }
 
-// Busca al usuario y arma el objeto user_info en formato Xtream, sin importar
-// si las credenciales son válidas o no (Xtream siempre responde 200 OK y
-// comunica el resultado a través de "auth": 1 / 0 dentro del JSON).
+// Busca al usuario y arma el objeto user_info en formato Xtream.
+// Xtream siempre responde 200 OK; el resultado se comunica con "auth": 1/0.
 function construirUserInfo(username, password) {
   const u = db.prepare('SELECT * FROM usuarios WHERE username = ?').get(username);
 
@@ -31,13 +31,10 @@ function construirUserInfo(username, password) {
   const auth = credencialesValidas && activo && !vencido;
 
   let status = 'Disabled';
-  if (!credencialesValidas) status = 'Disabled';
-  else if (!activo) status = 'Disabled';
-  else if (vencido) status = 'Expired';
-  else status = 'Active';
+  if (credencialesValidas && activo && vencido) status = 'Expired';
+  else if (credencialesValidas && activo && !vencido) status = 'Active';
 
   return {
-    usuario: auth ? u : null,
     auth,
     user_info: {
       username: username || '',
@@ -56,10 +53,9 @@ function construirUserInfo(username, password) {
 }
 
 function construirServerInfo(req) {
-  const host = req.hostname;
-  const esHttps = req.protocol === 'https';
+  const esHttps = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https';
   return {
-    url: host,
+    url: req.hostname,
     port: esHttps ? '80' : String(req.socket.localPort || 80),
     https_port: '443',
     server_protocol: esHttps ? 'https' : 'http',
@@ -76,6 +72,7 @@ function armarListasContenido() {
            p.id AS proveedor_id, p.nombre AS proveedor_nombre
     FROM contenido c
     LEFT JOIN proveedores p ON p.id = c.proveedor_id
+    WHERE c.tipo = 'live'
     ORDER BY c.categoria, c.titulo
   `).all();
 
@@ -107,50 +104,60 @@ function armarListasContenido() {
   return { streams, categorias };
 }
 
-// GET o POST /SNEOSMART5/api/  (login estilo Xtream: player_api.php)
-router.all('/', (req, res) => {
-  const username = req.body.username || req.query.username;
-  const password = req.body.password || req.query.password;
+function manejarPlayerApi(req, res) {
+  const username = req.query.username || req.body.username;
+  const password = req.query.password || req.body.password;
+  const action = req.query.action || req.body.action;
 
-  if (!username || !password) {
-    return res.json({ user_info: { auth: 0, status: 'Disabled', message: 'Usuario y contraseña requeridos' } });
+  const { auth } = construirUserInfo(username, password);
+
+  // Acciones que devuelven listas: si no está autenticado, lista vacía
+  // (así el player no crashea, simplemente no muestra nada).
+  if (action) {
+    if (!auth) return res.json([]);
+
+    const { categorias, streams } = armarListasContenido();
+
+    switch (action) {
+      case 'get_live_categories':
+        return res.json(categorias);
+      case 'get_live_streams': {
+        const { category_id } = req.query;
+        let resultado = streams;
+        if (category_id) resultado = streams.filter(s => String(s.category_id) === String(category_id));
+        return res.json(resultado);
+      }
+      // No manejamos VOD/series todavía: devolvemos listas vacías en vez
+      // de 404, para que la app no falle al pedirlas.
+      case 'get_vod_categories':
+      case 'get_vod_streams':
+      case 'get_series_categories':
+      case 'get_series':
+      default:
+        return res.json([]);
+    }
   }
 
-  const { auth, user_info } = construirUserInfo(username, password);
+  // Sin "action" => es el login (player_api.php?username=..&password=..)
+  const { user_info } = construirUserInfo(username, password);
   const server_info = construirServerInfo(req);
+  return res.json({ user_info, server_info });
+}
 
-  if (!auth) {
-    // Xtream responde 200 igual, la app lee "auth": 0 / "status" para mostrar el motivo.
-    return res.json({ user_info, server_info });
-  }
+// Endpoint real que usa la app (Retrofit): /SNEOSMART5/api/player_api.php
+router.all('/player_api.php', manejarPlayerApi);
 
-  res.json({ user_info, server_info });
-});
+// Alias en la raíz, útil para probar a mano desde el navegador/curl.
+router.all('/', manejarPlayerApi);
 
-// GET /SNEOSMART5/api/get_live_categories?username=&password=
+// Alias sueltos (compatibilidad con otras apps que sí usan rutas separadas)
 router.get('/get_live_categories', (req, res) => {
-  const { username, password } = req.query;
-  const { auth } = construirUserInfo(username, password);
-  if (!auth) return res.json([]);
-
-  const { categorias } = armarListasContenido();
-  res.json(categorias);
+  req.query.action = 'get_live_categories';
+  manejarPlayerApi(req, res);
 });
-
-// GET /SNEOSMART5/api/get_live_streams?username=&password=&category_id=
 router.get('/get_live_streams', (req, res) => {
-  const { username, password, category_id } = req.query;
-  const { auth } = construirUserInfo(username, password);
-  if (!auth) return res.json([]);
-
-  const { streams } = armarListasContenido();
-
-  let resultado = streams;
-  if (category_id) {
-    resultado = streams.filter(s => String(s.category_id) === String(category_id));
-  }
-
-  res.json(resultado);
+  req.query.action = 'get_live_streams';
+  manejarPlayerApi(req, res);
 });
 
 module.exports = router;

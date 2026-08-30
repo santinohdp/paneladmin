@@ -79,32 +79,62 @@ los usuarios/contenido persistan entre deploys, sumá un **Persistent Disk**
 
 ## API pública `/SNEOSMART5/api`
 
-### Login + config de sesión + listas (todo en una llamada)
+**Importante:** el endpoint real que consumen las apps tipo Xtream Codes (Retrofit)
+es `/SNEOSMART5/api/player_api.php`, no la raíz. La app arma la URL como
+`_panelURL + "player_api.php"`, así que `_panelURL` debe terminar en `/`:
 
 ```
-GET/POST /SNEOSMART5/api/?username=USUARIO&password=CLAVE
+const-string v0, "https://tu-app.onrender.com/SNEOSMART5/api/"
 ```
 
-Respuesta:
+### Login (sin parámetro `action`)
+
+```
+GET /SNEOSMART5/api/player_api.php?username=USUARIO&password=CLAVE
+```
+
+Responde **siempre 200 OK** (nunca 401/403, como hace Xtream real). El éxito o
+fallo se comunica con `"auth": 1` o `"auth": 0` dentro del JSON:
+
 ```json
 {
-  "ok": true,
-  "user_info": { "username": "...", "status": "Active", "exp_date": "2026-12-31", "max_connections": 1 },
-  "server_info": { "url": "...", "base_path": "/SNEOSMART5/api", "time_now": "..." },
-  "categories": [{ "category_id": 1, "category_name": "General" }],
-  "streams": [{ "id": 1, "titulo": "Canal Demo", "url_stream": "...", "categoria": "General", "proveedor_nombre": "..." }]
+  "user_info": {
+    "username": "...", "password": "...", "message": "",
+    "auth": 1, "status": "Active",
+    "exp_date": "1798675200", "is_trial": "0",
+    "active_cons": "0", "created_at": "1788128080",
+    "max_connections": "1",
+    "allowed_output_formats": ["m3u8", "ts", "rtmp"]
+  },
+  "server_info": {
+    "url": "...", "port": "80", "https_port": "443",
+    "server_protocol": "https", "rtmp_port": "25461",
+    "timezone": "America/Argentina/Buenos_Aires",
+    "timestamp_now": 1788128080, "time_now": "..."
+  }
 }
 ```
 
-Si la cuenta no existe, la contraseña es incorrecta, está suspendida (`activo = 0`)
-o `fecha_vencimiento` ya pasó, responde `401`/`403` con `{ "ok": false, "error": "..." }`.
+`status` es `"Active"`, `"Expired"` o `"Disabled"` según corresponda.
 
-### Compatibilidad estilo Xtream Codes
+### Categorías y streams (mismo endpoint, con `action`)
 
 ```
-GET /SNEOSMART5/api/get_live_categories?username=&password=
-GET /SNEOSMART5/api/get_live_streams?username=&password=&category_id=
+GET /SNEOSMART5/api/player_api.php?username=&password=&action=get_live_categories
+GET /SNEOSMART5/api/player_api.php?username=&password=&action=get_live_streams
+GET /SNEOSMART5/api/player_api.php?username=&password=&action=get_live_streams&category_id=1
 ```
+
+Si las credenciales no son válidas, estas acciones devuelven `[]` (array vacío)
+en vez de un error, para que la app no falle al pedir listas.
+
+Las acciones de VOD y series (`get_vod_categories`, `get_vod_streams`,
+`get_series_categories`, `get_series`) también responden `[]` — el panel
+actualmente solo administra contenido `live`. Si necesitás películas/series,
+avisá para sumarlas al esquema.
+
+También quedan disponibles, por compatibilidad, `GET /SNEOSMART5/api/get_live_categories`
+y `GET /SNEOSMART5/api/get_live_streams` como rutas sueltas.
 
 ## Panel admin
 
