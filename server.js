@@ -23,7 +23,23 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // ---- API pública consumida por la app/cliente ----
+// Bajo el prefijo custom (por si alguna app específica lo espera así):
 app.use('/SNEOSMART5/api', publicApiRoutes);
+
+// Y también en la raíz del dominio, que es lo que espera CUALQUIER app
+// IPTV estándar compatible con Xtream Codes (IPTV Smarters, TiviMate, etc.):
+// ellas arman la URL como {servidor}/player_api.php directamente, sin
+// ningún prefijo. Con esto, poner solo el dominio en la app ya funciona.
+const { manejarPlayerApi } = publicApiRoutes;
+app.all('/player_api.php', manejarPlayerApi);
+app.get('/get_live_categories', (req, res) => {
+  req.query.action = 'get_live_categories';
+  manejarPlayerApi(req, res);
+});
+app.get('/get_live_streams', (req, res) => {
+  req.query.action = 'get_live_streams';
+  manejarPlayerApi(req, res);
+});
 
 // ---- API del panel administrativo ----
 app.use('/SNEOSMART5/admin/api/auth', adminAuthRoutes);
