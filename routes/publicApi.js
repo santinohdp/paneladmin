@@ -161,3 +161,4 @@ router.get('/get_live_streams', (req, res) => {
 });
 
 module.exports = router;
+module.exports.manejarPlayerApi = manejarPlayerApi;
