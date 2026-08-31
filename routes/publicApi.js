@@ -1,12 +1,3 @@
-```js
-// routes/publicApi.js
-// API consumida por la app/cliente.
-// Base montada en /SNEOSMART5/api
-//
-// La app usa:
-//   {baseURL}player_api.php?username=..&password=..[&action=..]
-//
-// Esquema compatible con Xtream Codes.
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
@@ -23,23 +14,26 @@ function hoyISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
-
 function unixSeconds(fechaISO) {
-  const t = new Date(
-    fechaISO.includes(' ')
-      ? fechaISO.replace(' ', 'T') + 'Z'
-      : fechaISO + 'T00:00:00Z'
-  ).getTime();
+  if (!fechaISO) return '0';
 
-  return Math.floor((isNaN(t) ? Date.now() : t) / 1000);
+  const fecha = String(fechaISO);
+
+  const iso = fecha.includes(' ')
+    ? fecha.replace(' ', 'T') + 'Z'
+    : fecha + 'T00:00:00Z';
+
+  const tiempo = new Date(iso).getTime();
+
+  if (isNaN(tiempo)) {
+    return String(Math.floor(Date.now() / 1000));
+  }
+
+  return String(Math.floor(tiempo / 1000));
 }
 
-
-// Limpia la URL del stream.
-// Si no existe o está vacía, devuelve una cadena vacía.
 function limpiarUrlStream(url) {
   if (!url) return '';
-
   return String(url).trim();
 }
 
@@ -49,58 +43,65 @@ function limpiarUrlStream(url) {
 // ============================================================
 
 function construirUserInfo(username, password) {
-  const u = db
+
+  const usuario = db
     .prepare('SELECT * FROM usuarios WHERE username = ?')
     .get(username);
 
   const credencialesValidas =
-    !!u && bcrypt.compareSync(password || '', u.password);
+    !!usuario &&
+    bcrypt.compareSync(
+      password || '',
+      usuario.password
+    );
 
   const activo =
-    credencialesValidas && !!u.activo;
+    credencialesValidas &&
+    !!usuario.activo;
 
   const vencido =
     credencialesValidas &&
-    u.fecha_vencimiento < hoyISO();
+    usuario.fecha_vencimiento &&
+    usuario.fecha_vencimiento < hoyISO();
 
   const auth =
     credencialesValidas &&
     activo &&
     !vencido;
 
-
   let status = 'Disabled';
 
   if (credencialesValidas && activo && vencido) {
     status = 'Expired';
-  } else if (credencialesValidas && activo && !vencido) {
+  }
+
+  if (credencialesValidas && activo && !vencido) {
     status = 'Active';
   }
 
-
   return {
-    auth,
+    auth: !!auth,
 
     user_info: {
       username: username || '',
       password: password || '',
       message: '',
       auth: auth ? 1 : 0,
-      status,
+      status: status,
 
-      exp_date: u
-        ? String(unixSeconds(u.fecha_vencimiento))
+      exp_date: usuario
+        ? unixSeconds(usuario.fecha_vencimiento)
         : '0',
 
       is_trial: '0',
       active_cons: '0',
 
-      created_at: u
-        ? String(unixSeconds(u.creado_en))
+      created_at: usuario
+        ? unixSeconds(usuario.creado_en)
         : '0',
 
-      max_connections: u
-        ? String(u.max_conexiones)
+      max_connections: usuario
+        ? String(usuario.max_conexiones || 1)
         : '1',
 
       allowed_output_formats: [
@@ -118,9 +119,13 @@ function construirUserInfo(username, password) {
 // ============================================================
 
 function construirServerInfo(req) {
+
+  const protocoloForwarded =
+    req.get('x-forwarded-proto');
+
   const esHttps =
     req.protocol === 'https' ||
-    req.get('x-forwarded-proto') === 'https';
+    protocoloForwarded === 'https';
 
   return {
     url: req.hostname,
@@ -152,12 +157,12 @@ function construirServerInfo(req) {
 
 
 // ============================================================
-// CONTENIDO
+// LISTAS DE CONTENIDO
 // ============================================================
 
 function armarListasContenido() {
 
-  const contenido = db.prepare(`
+  const sql = `
     SELECT
       c.id,
       c.titulo,
@@ -167,107 +172,118 @@ function armarListasContenido() {
       c.logo,
       p.id AS proveedor_id,
       p.nombre AS proveedor_nombre
-
     FROM contenido c
-
     LEFT JOIN proveedores p
       ON p.id = c.proveedor_id
-
     WHERE c.tipo = 'live'
-
     ORDER BY c.categoria, c.titulo
-  `).all();
+  `;
+
+  const contenido =
+    db.prepare(sql).all();
 
 
-  // ----------------------------------------------------------
+  // ==========================================================
   // CATEGORÍAS
-  // ----------------------------------------------------------
+  // ==========================================================
 
-  const categorias = [
+  const nombresCategorias = [
     ...new Set(
-      contenido.map(c => c.categoria)
+      contenido.map(c =>
+        c.categoria || 'Sin categoría'
+      )
     )
-  ].map((nombre, i) => ({
-
-    category_id:
-      String(i + 1),
-
-    category_name:
-      nombre || 'Sin categoría',
-
-    parent_id:
-      0
-
-  }));
+  ];
 
 
-  // ----------------------------------------------------------
-  // STREAMS
-  // ----------------------------------------------------------
+  const categorias =
+    nombresCategorias.map(
+      (nombre, indice) => ({
+        category_id:
+          String(indice + 1),
 
-  const streams = contenido.map((c, i) => {
+        category_name:
+          nombre,
 
-    const cat = categorias.find(
-      cat =>
-        cat.category_name === c.categoria
+        parent_id:
+          0
+      })
     );
 
 
-    return {
+  // ==========================================================
+  // STREAMS
+  // ==========================================================
 
-      num:
-        i + 1,
+  const streams =
+    contenido.map((c, indice) => {
 
-      name:
-        c.titulo,
+      const categoria =
+        c.categoria ||
+        'Sin categoría';
 
-      stream_type:
-        'live',
+      const cat =
+        categorias.find(
+          item =>
+            item.category_name ===
+            categoria
+        );
 
-      stream_id:
-        c.id,
 
-      stream_icon:
-        c.logo || '',
+      return {
+        num:
+          indice + 1,
 
-      epg_channel_id:
-        '',
+        name:
+          c.titulo || '',
 
-      added:
-        String(
-          Math.floor(
-            Date.now() / 1000
-          )
-        ),
+        stream_type:
+          'live',
 
-      category_id:
-        cat
-          ? cat.category_id
-          : '0',
+        stream_id:
+          c.id,
 
-      custom_sid:
-        '',
+        stream_icon:
+          c.logo || '',
 
-      tv_archive:
-        0,
+        epg_channel_id:
+          '',
 
-      direct_source:
-        limpiarUrlStream(
-          c.url_stream
-        ),
+        added:
+          String(
+            Math.floor(
+              Date.now() / 1000
+            )
+          ),
 
-      tv_archive_duration:
-        0,
+        category_id:
+          cat
+            ? cat.category_id
+            : '0',
 
-      thumbnail:
-        c.logo || ''
-    };
-  });
+        custom_sid:
+          '',
+
+        tv_archive:
+          0,
+
+        direct_source:
+          limpiarUrlStream(
+            c.url_stream
+          ),
+
+        tv_archive_duration:
+          0,
+
+        thumbnail:
+          c.logo || ''
+      };
+    });
 
 
   return {
-    streams,
-    categorias
+    streams: streams,
+    categorias: categorias
   };
 }
 
@@ -280,84 +296,74 @@ function manejarPlayerApi(req, res) {
 
   const username =
     req.query.username ||
-    req.body?.username;
+    (req.body && req.body.username);
 
   const password =
     req.query.password ||
-    req.body?.password;
+    (req.body && req.body.password);
 
   const action =
     req.query.action ||
-    req.body?.action;
+    (req.body && req.body.action);
 
 
-  // ----------------------------------------------------------
-  // AUTENTICACIÓN
-  // ----------------------------------------------------------
-
-  const { auth } =
+  const informacion =
     construirUserInfo(
       username,
       password
     );
 
 
-  // ----------------------------------------------------------
+  const auth =
+    informacion.auth;
+
+
+  // ==========================================================
   // ACCIONES
-  // ----------------------------------------------------------
+  // ==========================================================
 
   if (action) {
 
-    // Si no está autenticado,
-    // devolvemos lista vacía.
     if (!auth) {
       return res.json([]);
     }
 
 
-    const {
-      categorias,
-      streams
-    } = armarListasContenido();
+    const listas =
+      armarListasContenido();
 
 
     switch (action) {
 
-      // ------------------------------------------------------
-      // CATEGORÍAS DE TV EN VIVO
-      // ------------------------------------------------------
-
       case 'get_live_categories':
 
         return res.json(
-          categorias
+          listas.categorias
         );
 
 
-      // ------------------------------------------------------
-      // CANALES EN VIVO
-      // ------------------------------------------------------
-
       case 'get_live_streams': {
 
-        const category_id =
+        const categoryId =
           req.query.category_id ||
-          req.body?.category_id;
+          (req.body &&
+            req.body.category_id);
+
 
         let resultado =
-          streams;
+          listas.streams;
 
 
-        if (category_id) {
+        if (categoryId) {
 
           resultado =
-            streams.filter(
-              s =>
+            resultado.filter(
+              stream =>
                 String(
-                  s.category_id
+                  stream.category_id
                 ) ===
                 String(
-                  category_id
+                  categoryId
                 )
             );
         }
@@ -369,27 +375,16 @@ function manejarPlayerApi(req, res) {
       }
 
 
-      // ------------------------------------------------------
-      // VOD
-      // ------------------------------------------------------
-
       case 'get_vod_categories':
 
       case 'get_vod_streams':
-
-
-      // ------------------------------------------------------
-      // SERIES
-      // ------------------------------------------------------
 
       case 'get_series_categories':
 
       case 'get_series':
 
+        return res.json([]);
 
-      // ------------------------------------------------------
-      // ACCIÓN DESCONOCIDA
-      // ------------------------------------------------------
 
       default:
 
@@ -398,27 +393,17 @@ function manejarPlayerApi(req, res) {
   }
 
 
-  // ----------------------------------------------------------
-  // SIN ACTION = LOGIN
-  // ----------------------------------------------------------
-
-  const {
-    user_info
-  } = construirUserInfo(
-    username,
-    password
-  );
-
-
-  const server_info =
-    construirServerInfo(req);
-
+  // ==========================================================
+  // LOGIN
+  // ==========================================================
 
   return res.json({
 
-    user_info,
+    user_info:
+      informacion.user_info,
 
-    server_info
+    server_info:
+      construirServerInfo(req)
 
   });
 }
@@ -428,19 +413,10 @@ function manejarPlayerApi(req, res) {
 // RUTAS
 // ============================================================
 
-// Endpoint principal utilizado por la app:
-//
-// /SNEOSMART5/api/player_api.php
-
 router.all(
   '/player_api.php',
   manejarPlayerApi
 );
-
-
-// Alias en la raíz:
-//
-// /SNEOSMART5/api/
 
 router.all(
   '/',
@@ -449,10 +425,8 @@ router.all(
 
 
 // ============================================================
-// COMPATIBILIDAD
+// RUTAS COMPATIBLES
 // ============================================================
-
-// Categorías
 
 router.get(
   '/get_live_categories',
@@ -468,8 +442,6 @@ router.get(
   }
 );
 
-
-// Streams
 
 router.get(
   '/get_live_streams',
@@ -487,11 +459,10 @@ router.get(
 
 
 // ============================================================
-// EXPORTACIONES
+// EXPORTAR
 // ============================================================
 
 module.exports = router;
 
 module.exports.manejarPlayerApi =
   manejarPlayerApi;
-```
