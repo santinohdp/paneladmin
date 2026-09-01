@@ -354,6 +354,87 @@ document.getElementById('nuevoContenidoBtn').addEventListener('click', async () 
   bindContenidoForm();
 });
 
+/* ---- Importar lista M3U ---- */
+function formImportarM3uHTML() {
+  const proveedoresOptions = (window._proveedoresCache || []).map(p =>
+    `<option value="${p.id}">${p.nombre}</option>`
+  ).join('');
+
+  return `
+    <h2 class="text-lg font-semibold">Importar lista M3U</h2>
+    <p class="text-sm text-slate-400">
+      Pegá la URL de una lista M3U/M3U8 (el servidor la descarga solo), o pegá
+      directamente el contenido de la lista abajo. Se van a crear todos los
+      canales encontrados, cada uno con su categoría y logo si la lista los trae.
+    </p>
+    <form id="importarM3uForm" class="space-y-3">
+      <div>
+        <label class="block text-sm text-slate-400 mb-1">URL de la lista M3U</label>
+        <input name="url" type="text" placeholder="https://.../lista.m3u8"
+          class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm" />
+      </div>
+      <div class="text-center text-slate-500 text-xs">— o —</div>
+      <div>
+        <label class="block text-sm text-slate-400 mb-1">Pegar contenido de la lista</label>
+        <textarea name="contenido_m3u" rows="6" placeholder="#EXTM3U&#10;#EXTINF:-1 group-title=&quot;Deportes&quot;,Canal 1&#10;http://.../canal1.m3u8"
+          class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm font-mono text-xs"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm text-slate-400 mb-1">Proveedor (opcional, aplica a todos)</label>
+        <select name="proveedor_id" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm">
+          <option value="">Sin proveedor</option>
+          ${proveedoresOptions}
+        </select>
+      </div>
+      <p id="importarM3uError" class="text-red-400 text-sm hidden"></p>
+      <p id="importarM3uOk" class="text-emerald-400 text-sm hidden"></p>
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" onclick="closeModal()" class="px-4 py-2 rounded-lg bg-slate-800 text-sm">Cancelar</button>
+        <button type="submit" id="importarM3uSubmit" class="px-4 py-2 rounded-lg bg-emerald-600 text-sm font-medium">Importar</button>
+      </div>
+    </form>
+  `;
+}
+
+document.getElementById('importarM3uBtn').addEventListener('click', async () => {
+  if (!window._proveedoresCache) await cargarProveedores();
+  openModal(formImportarM3uHTML());
+
+  document.getElementById('importarM3uForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const payload = Object.fromEntries(fd.entries());
+    if (!payload.proveedor_id) delete payload.proveedor_id;
+    if (!payload.url) delete payload.url;
+    if (!payload.contenido_m3u) delete payload.contenido_m3u;
+
+    const errorEl = document.getElementById('importarM3uError');
+    const okEl = document.getElementById('importarM3uOk');
+    const submitBtn = document.getElementById('importarM3uSubmit');
+    errorEl.classList.add('hidden');
+    okEl.classList.add('hidden');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Importando...';
+
+    try {
+      const data = await apiFetch(`${API_BASE}/contenido/importar-m3u`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      okEl.textContent = `Se importaron ${data.importados} canales correctamente.`;
+      okEl.classList.remove('hidden');
+      cargarContenido();
+      setTimeout(closeModal, 1500);
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.classList.remove('hidden');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Importar';
+    }
+  });
+});
+
 async function editarContenido(c) {
   if (!window._proveedoresCache) await cargarProveedores();
   openModal(formContenidoHTML(c));
