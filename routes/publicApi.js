@@ -66,7 +66,7 @@ function construirServerInfo(req) {
   };
 }
 
-function armarListasContenido() {
+function armarListasContenido(req, username, password) {
   const contenido = db.prepare(`
     SELECT c.id, c.titulo, c.url_stream, c.tipo, c.categoria, c.logo,
            p.id AS proveedor_id, p.nombre AS proveedor_nombre
@@ -82,8 +82,12 @@ function armarListasContenido() {
     parent_id: 0,
   }));
 
+  const esHttps = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https';
+  const base = `${esHttps ? 'https' : 'http'}://${req.get('host')}`;
+
   const streams = contenido.map((c, i) => {
     const cat = categorias.find(cat => cat.category_name === c.categoria);
+    const extension = (c.url_stream.split('.').pop() || 'm3u8').split('?')[0].slice(0, 4);
     return {
       num: i + 1,
       name: c.titulo,
@@ -95,7 +99,7 @@ function armarListasContenido() {
       category_id: cat ? cat.category_id : '0',
       custom_sid: '',
       tv_archive: 0,
-      direct_source: c.url_stream,
+      direct_source: `${base}/live/${encodeURIComponent(username)}/${encodeURIComponent(password)}/${c.id}.${extension}`,
       tv_archive_duration: 0,
       thumbnail: c.logo || '',
     };
@@ -116,7 +120,7 @@ function manejarPlayerApi(req, res) {
   if (action) {
     if (!auth) return res.json([]);
 
-    const { categorias, streams } = armarListasContenido();
+    const { categorias, streams } = armarListasContenido(req, username, password);
 
     switch (action) {
       case 'get_live_categories':
@@ -144,6 +148,32 @@ function manejarPlayerApi(req, res) {
   return res.json({ user_info, server_info });
 }
 
+// Handler de reproducción: /live/{usuario}/{contraseña}/{id_del_canal}.{ext}
+// Este es el patrón de URL que arman los reproductores IPTV estándar para
+// pedir el stream en sí (no lo sacan de "direct_source" del JSON). Acá
+// validamos credenciales y redirigimos (302) al link real cargado en el panel.
+function manejarLiveStream(req, res) {
+  const { username, password } = req.params;
+  const idConExtension = req.params.idConExtension || req.params[0] || '';
+  const streamId = parseInt(idConExtension.split('.')[0], 10);
+
+  const { auth } = construirUserInfo(username, password);
+  if (!auth) return res.status(403).send('Forbidden');
+
+  if (!streamId || isNaN(streamId)) return res.status(404).send('Not found');
+
+  const canal = db.prepare(`
+    SELECT url_stream FROM contenido WHERE id = ? AND tipo = 'live'
+  `).get(streamId);
+
+  if (!canal) return res.status(404).send('Stream not found');
+
+  // 302 hacia la URL real (M3U8/MP4/etc.) que cargaste en el panel.
+  res.redirect(302, canal.url_stream);
+}
+
+router.get('/live/:username/:password/:idConExtension', manejarLiveStream);
+
 // Endpoint bajo el prefijo custom: /SNEOSMART5/api/player_api.php
 router.all('/player_api.php', manejarPlayerApi);
 
@@ -162,3 +192,4 @@ router.get('/get_live_streams', (req, res) => {
 
 module.exports = router;
 module.exports.manejarPlayerApi = manejarPlayerApi;
+module.exports.manejarLiveStream = manejarLiveStream;
