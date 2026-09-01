@@ -6,6 +6,37 @@ const { requireAdminAuth } = require('../middleware/auth');
 const router = express.Router();
 router.use(requireAdminAuth);
 
+// Parsea el texto de una lista M3U/M3U8 extendida y devuelve un array de
+// { titulo, url_stream, categoria, logo }. Soporta el formato estándar:
+//   #EXTINF:-1 tvg-logo="..." group-title="Categoria",Nombre del Canal
+//   http://.../stream.m3u8
+function parsearM3U(texto) {
+  const lineas = texto.split(/\r?\n/);
+  const items = [];
+  let actual = null;
+
+  for (const lineaCruda of lineas) {
+    const linea = lineaCruda.trim();
+    if (!linea) continue;
+
+    if (linea.toUpperCase().startsWith('#EXTINF')) {
+      const logoMatch = linea.match(/tvg-logo="([^"]*)"/i);
+      const grupoMatch = linea.match(/group-title="([^"]*)"/i);
+      const nombreMatch = linea.match(/,([^,]*)$/);
+      actual = {
+        logo: logoMatch ? logoMatch[1] : '',
+        categoria: (grupoMatch ? grupoMatch[1] : '').trim() || 'General',
+        titulo: (nombreMatch ? nombreMatch[1] : 'Canal sin nombre').trim(),
+      };
+    } else if (!linea.startsWith('#') && actual) {
+      actual.url_stream = linea;
+      items.push(actual);
+      actual = null;
+    }
+  }
+  return items;
+}
+
 // GET /SNEOSMART5/admin/api/contenido?categoria=&proveedor_id=&buscar=
 router.get('/', (req, res) => {
   const { categoria, proveedor_id, buscar } = req.query;
@@ -30,6 +61,54 @@ router.get('/', (req, res) => {
 router.get('/categorias', (req, res) => {
   const rows = db.prepare('SELECT DISTINCT categoria FROM contenido ORDER BY categoria').all();
   res.json({ ok: true, categorias: rows.map(r => r.categoria) });
+});
+
+// POST /SNEOSMART5/admin/api/contenido/importar-m3u
+// Body: { url?: string, contenido_m3u?: string, proveedor_id?: number }
+// Hay que mandar "url" (para que el servidor la descargue) O "contenido_m3u"
+// (el texto de la lista ya pegado). Si ambos vienen, se prioriza el texto.
+router.post('/importar-m3u', async (req, res) => {
+  const { url, contenido_m3u, proveedor_id } = req.body;
+  let texto = contenido_m3u;
+
+  if (!texto && url) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        return res.status(400).json({ ok: false, error: `No se pudo descargar la lista (HTTP ${resp.status})` });
+      }
+      texto = await resp.text();
+    } catch (err) {
+      return res.status(400).json({ ok: false, error: 'No se pudo descargar la URL: ' + err.message });
+    }
+  }
+
+  if (!texto || !texto.trim()) {
+    return res.status(400).json({ ok: false, error: 'Falta la URL o el contenido de la lista M3U' });
+  }
+
+  const items = parsearM3U(texto);
+  if (items.length === 0) {
+    return res.status(400).json({ ok: false, error: 'No se encontraron canales válidos en esa lista' });
+  }
+
+  const insertar = db.prepare(`
+    INSERT INTO contenido (titulo, url_stream, tipo, categoria, logo, proveedor_id)
+    VALUES (?, ?, 'live', ?, ?, ?)
+  `);
+
+  db.exec('BEGIN');
+  try {
+    for (const item of items) {
+      insertar.run(item.titulo, item.url_stream, item.categoria, item.logo || null, proveedor_id || null);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    return res.status(500).json({ ok: false, error: 'Error guardando los canales: ' + err.message });
+  }
+
+  res.status(201).json({ ok: true, importados: items.length });
 });
 
 // POST /SNEOSMART5/admin/api/contenido
