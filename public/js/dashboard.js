@@ -274,6 +274,7 @@ async function cargarContenido() {
   const seleccion = filtroCat.value;
   filtroCat.innerHTML = `<option value="">Todas las categorías</option>` +
     categorias.map(c => `<option value="${c}" ${c === seleccion ? 'selected' : ''}>${c}</option>`).join('');
+  document.getElementById('borrarCategoriaBtn').disabled = !filtroCat.value;
 
   const tbody = document.getElementById('contenidoTbody');
   tbody.innerHTML = contenido.map(c => `
@@ -292,7 +293,22 @@ async function cargarContenido() {
 }
 
 document.getElementById('buscarContenido').addEventListener('input', () => cargarContenido());
-document.getElementById('filtroCategoria').addEventListener('change', () => cargarContenido());
+document.getElementById('filtroCategoria').addEventListener('change', () => {
+  document.getElementById('borrarCategoriaBtn').disabled = !document.getElementById('filtroCategoria').value;
+  cargarContenido();
+});
+
+document.getElementById('borrarCategoriaBtn').addEventListener('click', async () => {
+  const categoria = document.getElementById('filtroCategoria').value;
+  if (!categoria) return;
+  if (!confirm(`¿Eliminar TODOS los canales de la categoría "${categoria}"? Esta acción no se puede deshacer.`)) return;
+
+  const { eliminados } = await apiFetch(`${API_BASE}/contenido/categoria/${encodeURIComponent(categoria)}`, { method: 'DELETE' });
+  alert(`Se eliminaron ${eliminados} canales de "${categoria}".`);
+  document.getElementById('filtroCategoria').value = '';
+  document.getElementById('borrarCategoriaBtn').disabled = true;
+  cargarContenido();
+});
 
 function formContenidoHTML(c = {}) {
   const proveedoresOptions = (window._proveedoresCache || []).map(p =>
