@@ -73,13 +73,23 @@ router.post('/importar-m3u', async (req, res) => {
 
   if (!texto && url) {
     try {
-      const resp = await fetch(url);
+      const resp = await fetch(url, {
+        headers: {
+          // Muchos paneles IPTV rechazan pedidos sin un User-Agent de
+          // reproductor "real" (anti-scraping). Simulamos uno típico.
+          'User-Agent': 'VLC/3.0.20 LibVLC/3.0.20',
+        },
+        signal: AbortSignal.timeout(30000),
+        redirect: 'follow',
+      });
       if (!resp.ok) {
-        return res.status(400).json({ ok: false, error: `No se pudo descargar la lista (HTTP ${resp.status})` });
+        return res.status(400).json({ ok: false, error: `El servidor de la lista respondió con error HTTP ${resp.status}` });
       }
       texto = await resp.text();
     } catch (err) {
-      return res.status(400).json({ ok: false, error: 'No se pudo descargar la URL: ' + err.message });
+      // err.cause suele traer el motivo real (DNS, timeout, conexión rechazada, etc.)
+      const causa = err.cause?.message || err.cause?.code || err.message;
+      return res.status(400).json({ ok: false, error: `No se pudo descargar la URL: ${causa}` });
     }
   }
 
@@ -149,6 +159,14 @@ router.put('/:id', (req, res) => {
 
   const actualizado = db.prepare('SELECT * FROM contenido WHERE id = ?').get(req.params.id);
   res.json({ ok: true, contenido: actualizado });
+});
+
+// DELETE /SNEOSMART5/admin/api/contenido/categoria/:categoria
+// Borra TODOS los canales que pertenezcan a esa categoría de una sola vez.
+router.delete('/categoria/:categoria', (req, res) => {
+  const categoria = req.params.categoria;
+  const info = db.prepare('DELETE FROM contenido WHERE categoria = ?').run(categoria);
+  res.json({ ok: true, eliminados: info.changes });
 });
 
 // DELETE /SNEOSMART5/admin/api/contenido/:id
