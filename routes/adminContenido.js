@@ -57,10 +57,15 @@ router.get('/', (req, res) => {
   res.json({ ok: true, contenido: rows });
 });
 
-// GET /SNEOSMART5/admin/api/contenido/categorias  -> lista de categorías existentes
+// GET /SNEOSMART5/admin/api/contenido/categorias  -> categorías con cantidad de canales
 router.get('/categorias', (req, res) => {
-  const rows = db.prepare('SELECT DISTINCT categoria FROM contenido ORDER BY categoria').all();
-  res.json({ ok: true, categorias: rows.map(r => r.categoria) });
+  const rows = db.prepare(`
+    SELECT categoria, COUNT(*) AS total
+    FROM contenido
+    GROUP BY categoria
+    ORDER BY categoria
+  `).all();
+  res.json({ ok: true, categorias: rows });
 });
 
 // POST /SNEOSMART5/admin/api/contenido/importar-m3u
