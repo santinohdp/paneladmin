@@ -60,17 +60,7 @@
     <!-- ===== CONTENIDO ===== -->
     <section id="tab-contenido" class="tab-panel hidden space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="flex gap-2">
-          <input id="buscarContenido" placeholder="Buscar título..."
-            class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-56" />
-          <select id="filtroCategoria" class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm">
-            <option value="">Todas las categorías</option>
-          </select>
-          <button id="borrarCategoriaBtn" disabled
-            class="bg-red-900/50 text-red-300 px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed hover:bg-red-900">
-            Borrar categoría
-          </button>
-        </div>
+        <h2 class="font-semibold text-lg">Contenido</h2>
         <div class="flex gap-2">
           <button id="importarM3uBtn" class="bg-emerald-600 hover:bg-emerald-500 px-4 py-2 rounded-lg text-sm font-medium">
             Importar lista M3U
@@ -81,20 +71,42 @@
         </div>
       </div>
 
-      <div class="overflow-x-auto rounded-xl border border-slate-800">
-        <table class="w-full text-sm">
-          <thead class="bg-slate-900 text-slate-400">
-            <tr>
-              <th class="text-left px-4 py-3">Título</th>
-              <th class="text-left px-4 py-3">Tipo</th>
-              <th class="text-left px-4 py-3">Categoría</th>
-              <th class="text-left px-4 py-3">Proveedor</th>
-              <th class="text-left px-4 py-3">URL</th>
-              <th class="text-right px-4 py-3">Acciones</th>
-            </tr>
-          </thead>
-          <tbody id="contenidoTbody" class="divide-y divide-slate-800"></tbody>
-        </table>
+      <!-- Vista de categorías (default). No carga canales individuales acá,
+           solo el nombre de cada categoría y cuántos canales tiene, para no
+           tener que renderizar miles de filas de una. -->
+      <div id="categoriasView" class="space-y-3">
+        <input id="buscarCategoria" placeholder="Buscar categoría..."
+          class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-64" />
+
+        <div id="categoriasGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      </div>
+
+      <!-- Vista de canales de UNA categoría puntual (se carga bajo demanda) -->
+      <div id="canalesView" class="hidden space-y-4">
+        <div class="flex items-center gap-3">
+          <button id="volverCategoriasBtn" class="text-sm text-indigo-400 hover:underline">‹ Volver a categorías</button>
+          <h3 id="categoriaActualTitulo" class="font-semibold"></h3>
+        </div>
+
+        <div class="flex gap-2">
+          <input id="buscarContenido" placeholder="Buscar título..."
+            class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm w-64" />
+        </div>
+
+        <div class="overflow-x-auto rounded-xl border border-slate-800">
+          <table class="w-full text-sm">
+            <thead class="bg-slate-900 text-slate-400">
+              <tr>
+                <th class="text-left px-4 py-3">Título</th>
+                <th class="text-left px-4 py-3">Tipo</th>
+                <th class="text-left px-4 py-3">Proveedor</th>
+                <th class="text-left px-4 py-3">URL</th>
+                <th class="text-right px-4 py-3">Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="contenidoTbody" class="divide-y divide-slate-800"></tbody>
+          </table>
+        </div>
       </div>
     </section>
 
