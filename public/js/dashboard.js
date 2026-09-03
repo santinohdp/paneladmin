@@ -258,30 +258,84 @@ async function borrarProveedor(id) {
 /* =========================================================
    CONTENIDO
    ========================================================= */
-async function cargarContenido() {
+let categoriaActual = null; // null = viendo la lista de categorías
+let categoriasCache = [];
+
+// --- Vista de categorías (default) ---
+async function cargarCategoriasContenido() {
+  const { categorias } = await apiFetch(`${API_BASE}/contenido/categorias`);
+  categoriasCache = categorias;
+  renderCategorias();
+}
+
+function renderCategorias() {
+  const filtro = document.getElementById('buscarCategoria').value.trim().toLowerCase();
+  const lista = filtro
+    ? categoriasCache.filter(c => c.categoria.toLowerCase().includes(filtro))
+    : categoriasCache;
+
+  const grid = document.getElementById('categoriasGrid');
+  grid.innerHTML = lista.map(c => `
+    <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col gap-3">
+      <div>
+        <p class="font-medium">${c.categoria}</p>
+        <p class="text-slate-500 text-sm">${c.total} canal${c.total === 1 ? '' : 'es'}</p>
+      </div>
+      <div class="flex gap-2 mt-auto">
+        <button class="flex-1 bg-indigo-600 hover:bg-indigo-500 rounded-lg py-1.5 text-sm font-medium"
+          onclick="verCanalesDeCategoria('${c.categoria.replace(/'/g, "\\'")}')">
+          Ver canales
+        </button>
+        <button class="bg-red-900/50 hover:bg-red-900 text-red-300 rounded-lg px-3 py-1.5 text-sm"
+          onclick="borrarCategoriaCompleta('${c.categoria.replace(/'/g, "\\'")}')">
+          Borrar
+        </button>
+      </div>
+    </div>
+  `).join('') || `<p class="text-slate-500 text-sm col-span-full text-center py-6">Sin categorías todavía. Importá una lista M3U o agregá contenido.</p>`;
+}
+
+document.getElementById('buscarCategoria').addEventListener('input', renderCategorias);
+
+async function borrarCategoriaCompleta(categoria) {
+  if (!confirm(`¿Eliminar TODOS los canales de la categoría "${categoria}"? Esta acción no se puede deshacer.`)) return;
+  const { eliminados } = await apiFetch(`${API_BASE}/contenido/categoria/${encodeURIComponent(categoria)}`, { method: 'DELETE' });
+  alert(`Se eliminaron ${eliminados} canales de "${categoria}".`);
+  cargarCategoriasContenido();
+}
+
+// --- Vista de canales de una categoría puntual (bajo demanda) ---
+function verCanalesDeCategoria(categoria) {
+  categoriaActual = categoria;
+  document.getElementById('categoriasView').classList.add('hidden');
+  document.getElementById('canalesView').classList.remove('hidden');
+  document.getElementById('categoriaActualTitulo').textContent = categoria;
+  document.getElementById('buscarContenido').value = '';
+  cargarCanalesDeCategoriaActual();
+}
+
+document.getElementById('volverCategoriasBtn').addEventListener('click', () => {
+  categoriaActual = null;
+  document.getElementById('canalesView').classList.add('hidden');
+  document.getElementById('categoriasView').classList.remove('hidden');
+  cargarCategoriasContenido();
+});
+
+async function cargarCanalesDeCategoriaActual() {
+  if (!categoriaActual) return;
   if (!window._proveedoresCache) await cargarProveedores();
 
   const buscar = document.getElementById('buscarContenido').value.trim();
-  const categoria = document.getElementById('filtroCategoria').value;
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ categoria: categoriaActual });
   if (buscar) params.set('buscar', buscar);
-  if (categoria) params.set('categoria', categoria);
 
   const { contenido } = await apiFetch(`${API_BASE}/contenido?${params.toString()}`);
-  const { categorias } = await apiFetch(`${API_BASE}/contenido/categorias`);
-
-  const filtroCat = document.getElementById('filtroCategoria');
-  const seleccion = filtroCat.value;
-  filtroCat.innerHTML = `<option value="">Todas las categorías</option>` +
-    categorias.map(c => `<option value="${c}" ${c === seleccion ? 'selected' : ''}>${c}</option>`).join('');
-  document.getElementById('borrarCategoriaBtn').disabled = !filtroCat.value;
 
   const tbody = document.getElementById('contenidoTbody');
   tbody.innerHTML = contenido.map(c => `
     <tr>
       <td class="px-4 py-3 font-medium">${c.titulo}</td>
       <td class="px-4 py-3 text-slate-400">${c.tipo}</td>
-      <td class="px-4 py-3 text-slate-400">${c.categoria}</td>
       <td class="px-4 py-3 text-slate-400">${c.proveedor_nombre || '—'}</td>
       <td class="px-4 py-3 text-slate-500 max-w-xs truncate" title="${c.url_stream}">${c.url_stream}</td>
       <td class="px-4 py-3 text-right space-x-2">
@@ -289,26 +343,25 @@ async function cargarContenido() {
         <button class="text-red-400 hover:underline text-xs" onclick="borrarContenido(${c.id})">Eliminar</button>
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="6" class="px-4 py-6 text-center text-slate-500">Sin contenido</td></tr>`;
+  `).join('') || `<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500">Sin canales en esta categoría</td></tr>`;
 }
 
-document.getElementById('buscarContenido').addEventListener('input', () => cargarContenido());
-document.getElementById('filtroCategoria').addEventListener('change', () => {
-  document.getElementById('borrarCategoriaBtn').disabled = !document.getElementById('filtroCategoria').value;
-  cargarContenido();
-});
+document.getElementById('buscarContenido').addEventListener('input', () => cargarCanalesDeCategoriaActual());
 
-document.getElementById('borrarCategoriaBtn').addEventListener('click', async () => {
-  const categoria = document.getElementById('filtroCategoria').value;
-  if (!categoria) return;
-  if (!confirm(`¿Eliminar TODOS los canales de la categoría "${categoria}"? Esta acción no se puede deshacer.`)) return;
+// Punto de entrada llamado al abrir la pestaña "Contenido"
+function cargarContenido() {
+  categoriaActual = null;
+  document.getElementById('canalesView').classList.add('hidden');
+  document.getElementById('categoriasView').classList.remove('hidden');
+  cargarCategoriasContenido();
+}
 
-  const { eliminados } = await apiFetch(`${API_BASE}/contenido/categoria/${encodeURIComponent(categoria)}`, { method: 'DELETE' });
-  alert(`Se eliminaron ${eliminados} canales de "${categoria}".`);
-  document.getElementById('filtroCategoria').value = '';
-  document.getElementById('borrarCategoriaBtn').disabled = true;
-  cargarContenido();
-});
+// Refresca la vista en la que estemos parados (canales de una categoría, o el
+// listado de categorías) sin resetear la navegación innecesariamente.
+function refrescarVistaContenido() {
+  if (categoriaActual) cargarCanalesDeCategoriaActual();
+  else cargarCategoriasContenido();
+}
 
 function formContenidoHTML(c = {}) {
   const proveedoresOptions = (window._proveedoresCache || []).map(p =>
@@ -366,7 +419,7 @@ function formContenidoHTML(c = {}) {
 
 document.getElementById('nuevoContenidoBtn').addEventListener('click', async () => {
   if (!window._proveedoresCache) await cargarProveedores();
-  openModal(formContenidoHTML());
+  openModal(formContenidoHTML(categoriaActual ? { categoria: categoriaActual } : {}));
   bindContenidoForm();
 });
 
@@ -471,7 +524,7 @@ function bindContenidoForm(id) {
         await apiFetch(`${API_BASE}/contenido`, { method: 'POST', body: JSON.stringify(payload) });
       }
       closeModal();
-      cargarContenido();
+      refrescarVistaContenido();
     } catch (err) {
       errorEl.textContent = err.message;
       errorEl.classList.remove('hidden');
@@ -482,7 +535,7 @@ function bindContenidoForm(id) {
 async function borrarContenido(id) {
   if (!confirm('¿Eliminar este contenido?')) return;
   await apiFetch(`${API_BASE}/contenido/${id}`, { method: 'DELETE' });
-  cargarContenido();
+  refrescarVistaContenido();
 }
 
 // ---------- Carga inicial ----------
